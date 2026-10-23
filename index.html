@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Gold Mine 3D</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;touch-action:none}
+  html,body{width:100%;height:100%;overflow:hidden;background:#0a0a0a;font-family:system-ui,sans-serif}
+  canvas{display:block;width:100%;height:100%}
+  #ui{position:absolute;top:10px;left:12px;right:12px;color:#f5e6b8;text-shadow:0 2px 6px #000;font-size:15px;font-weight:600;pointer-events:none;z-index:20;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+  #ui span{color:#ffd700}
+  #mode{position:absolute;top:46px;left:12px;color:#aaa;font-size:13px;z-index:20;pointer-events:none}
+  #joystick-zone{position:absolute;left:0;bottom:0;width:48%;height:48%;z-index:15}
+  #joystick-base{position:absolute;width:114px;height:114px;border-radius:50%;background:rgba(255,255,255,0.1);border:2px solid rgba(255,215,0,0.45);left:20px;bottom:32px}
+  #joystick-knob{position:absolute;width:52px;height:52px;border-radius:50%;background:rgba(255,215,0,0.8);left:31px;top:31px}
+  #look-zone{position:absolute;right:0;top:0;width:52%;height:100%;z-index:10}
+  .btn{position:absolute;z-index:20;width:68px;height:68px;border-radius:50%;border:3px solid #ffd700;background:rgba(0,0,0,0.65);color:#ffd700;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;user-select:none}
+  #btn-action{right:18px;bottom:148px}
+  #btn-enter{right:18px;bottom:68px}
+  #btn-shop{right:92px;bottom:68px}
+  .btn:active{background:rgba(255,215,0,0.4);transform:scale(0.92)}
+  #shop{display:none;position:absolute;bottom:160px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.88);border:2px solid #ffd700;border-radius:12px;padding:14px;z-index:40;color:#f5e6b8;width:90%;max-width:320px;font-size:14px}
+  #shop h3{color:#ffd700;margin-bottom:10px;text-align:center}
+  #shop button{display:block;width:100%;margin:6px 0;padding:10px;background:#222;border:1px solid #ffd700;color:#ffd700;border-radius:8px;font-size:14px}
+  #hint{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:#fff;background:rgba(0,0,0,0.8);padding:16px 20px;border-radius:12px;font-size:14px;text-align:center;z-index:30;line-height:1.4;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div>$ <span id="money">0</span></div>
+  <div>Gold <span id="gold">0</span></div>
+  <div>Gravel <span id="gravel">0</span></div>
+  <div>Truck <span id="truckload">0</span></div>
+</div>
+<div id="mode">On Foot</div>
+
+<div id="joystick-zone"><div id="joystick-base"><div id="joystick-knob"></div></div></div>
+<div id="look-zone"></div>
+
+<button class="btn" id="btn-action">DIG</button>
+<button class="btn" id="btn-enter">ENTER</button>
+<button class="btn" id="btn-shop">SHOP</button>
+
+<div id="shop">
+  <h3>Upgrades</h3>
+  <button id="up-dig">Better Dig ($40)</button>
+  <button id="up-truck">Bigger Truck ($60)</button>
+  <button id="up-speed">Faster Machines ($50)</button>
+  <button id="up-sell">Sell All Gold</button>
+  <button id="close-shop">Close</button>
+</div>
+
+<div id="hint">
+  Open dig site ahead<br>
+  Dig → scoop → haul to sluice → sell gold<br>
+  Use SHOP for upgrades
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x5a9bc8);
+scene.fog = new THREE.Fog(0x5a9bc8, 40, 110);
+
+const camera = new THREE.PerspectiveCamera(65, innerWidth/innerHeight, 0.1, 160);
+camera.position.set(0, 5, 22);
+
+const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:'high-performance'});
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+scene.add(new THREE.HemisphereLight(0xb0d8ff, 0x3a2810, 0.55));
+const sun = new THREE.DirectionalLight(0xfff0d0, 1.2);
+sun.position.set(30, 50, 20);
+sun.castShadow = true;
+scene.add(sun);
+
+// Ground
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(120, 120),
+  new THREE.MeshStandardMaterial({color:0x5a3e22, roughness:1})
+);
+ground.rotation.x = -Math.PI/2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// Open dig zone
+const CELL = 2.6;
+const blocks = new Map();
+const dirtMat = new THREE.MeshStandardMaterial({color:0x6a4725, roughness:0.95});
+const deepMat = new THREE.MeshStandardMaterial({color:0x4a3015, roughness:1});
+const goldMat = new THREE.MeshStandardMaterial({color:0xffd700, metalness:0.95, roughness:0.18, emissive:0x553300, emissiveIntensity:0.45});
+const gravelMat = new THREE.MeshStandardMaterial({color:0x8a7355, roughness:1});
+
+function key(x,z){return x+','+z;}
+
+for(let x=-7; x<=7; x++){
+  for(let z=-12; z<=-2; z++){
+    if(Math.random() < 0.18) continue;
+    const h = 1 + Math.floor(Math.random()*3);
+    const m = new THREE.Mesh(new THREE.BoxGeometry(CELL, CELL*h, CELL), dirtMat);
+    m.position.set(x*CELL, CELL*h/2, z*CELL);
+    m.castShadow = m.receiveShadow = true;
+    m.userData = {x,z,h, hasGold: Math.random()<0.22};
+    scene.add(m);
+    blocks.set(key(x,z), m);
+  }
+}
+
+// Sluice
+const sluice = new THREE.Group();
+sluice.position.set(16, 0, 4);
+const sBox = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.1, 9), new THREE.MeshStandardMaterial({color:0x5c4030}));
+sBox.position.y = 0.9; sBox.castShadow = true; sluice.add(sBox);
+for(let i=0;i<6;i++){
+  const r = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.22, 0.18), new THREE.MeshStandardMaterial({color:0x3a2a18}));
+  r.position.set(0, 1.2, -3.2 + i*1.15); sluice.add(r);
+}
+const water = new THREE.Mesh(new THREE.PlaneGeometry(3, 8), new THREE.MeshStandardMaterial({color:0x3a9ad9, transparent:true, opacity:0.55}));
+water.rotation.x = -Math.PI/2; water.position.set(0, 1.25, 0); sluice.add(water);
+scene.add(sluice);
+
+// Vehicles
+function makeExcavator(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4.4, 1.8, 6.8), new THREE.MeshStandardMaterial({color:0xc9a227, metalness:0.6}));
+  body.position.y = 1.4; body.castShadow = true; g.add(body);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(2.7, 2.2, 2.6), new THREE.MeshStandardMaterial({color:0x1a1a1a}));
+  cab.position.set(0, 3.3, -1.2); g.add(cab);
+  const boom = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 8.5), new THREE.MeshStandardMaterial({color:0xd4a017, metalness:0.7}));
+  boom.position.set(0, 3.6, 4.2); boom.rotation.x = -0.4; g.add(boom);
+  const bucket = new THREE.Mesh(new THREE.BoxGeometry(2.5, 1.5, 2), new THREE.MeshStandardMaterial({color:0x333}));
+  bucket.position.set(0, 2, 9); g.add(bucket);
+  g.userData = {type:'excavator', speed:8.5, turn:1.5};
+  return g;
+}
+function makePayloader(){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4, 1.9, 5.8), new THREE.MeshStandardMaterial({color:0xd4a017, metalness:0.55}));
+  body.position.y = 1.5; body.castShadow = true; g.add(body);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2, 2.3), new THREE.MeshStandardMaterial({color:0x222}));
+  cab.position.set(0, 3.2, -0.9); g.add(cab);
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.8, 4.8), new THREE.MeshStandardMaterial({color:0xb8860b}));
+  arm.position.set(0, 2.9, 3.4); arm.rotation.x = -0.5; g.add(arm);
+  const bucket = new THREE.Mesh(new THREE.BoxGeometry(3.4, 1.4, 1.7), new THREE.MeshStandardMaterial({color:0x444}));
+  bucket.position.set(0, 1.7, 6.2); g.add(bucket);
+  g.userData = {type:'payloader', speed:10, turn:1.8};
+  return g;
+}
+function makeDumpTruck(){
+  const g = new THREE.Group();
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(3.8, 1.3, 8.5), new THREE.MeshStandardMaterial({color:0x555, metalness:0.4}));
+  chassis.position.y = 1.2; chassis.castShadow = true; g.add(chassis);
+  const cab = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.3, 3), new THREE.MeshStandardMaterial({color:0x1a3a6a}));
+  cab.position.set(0, 2.7, -2.8); g.add(cab);
+  const bed = new THREE.Mesh(new THREE.BoxGeometry(3.6, 1.7, 5), new THREE.MeshStandardMaterial({color:0x8b4513}));
+  bed.position.set(0, 2.5, 1.9); g.add(bed);
+  g.userData = {type:'truck', speed:12, turn:1.2, load:0, maxLoad:20};
+  return g;
+}
+
+const excavator = makeExcavator(); excavator.position.set(-10, 0, 8); scene.add(excavator);
+const payloader = makePayloader(); payloader.position.set(-3, 0, 10); scene.add(payloader);
+const dumpTruck = makeDumpTruck(); dumpTruck.position.set(6, 0, 9); scene.add(dumpTruck);
+const vehicles = [excavator, payloader, dumpTruck];
+
+// State
+let mode = 'foot';
+let currentVehicle = null;
+let yaw = 0, pitch = 0;
+const velocity = new THREE.Vector3();
+let canJump = true;
+let money = 0, gold = 0, gravel = 0;
+let digPower = 1;
+let speedMult = 1;
+const move = {x:0, z:0};
+const gravelPiles = [];
+const goldNuggets = [];
+const raycaster = new THREE.Raycaster();
+
+function collides(pos, radius=1.2){
+  for(const m of blocks.values()){
+    const dx = pos.x - m.position.x;
+    const dz = pos.z - m.position.z;
+    if(Math.abs(dx) < CELL*0.7 + radius && Math.abs(dz) < CELL*0.7 + radius && pos.y < m.position.y + m.userData.h*CELL*0.6){
+      return true;
+    }
+  }
+  return false;
+}
+
+// Touch
+const joyBase = document.getElementById('joystick-base');
+const joyKnob = document.getElementById('joystick-knob');
+const lookZone = document.getElementById('look-zone');
+const hint = document.getElementById('hint');
+const modeEl = document.getElementById('mode');
+const btnAction = document.getElementById('btn-action');
+const shopEl = document.getElementById('shop');
+
+let joyActive=false, joyId=null, joyOrigin={x:0,y:0};
+let lookActive=false, lookId=null, lastLook={x:0,y:0};
+
+function setKnob(dx,dy){
+  const max=36;
+  const len=Math.hypot(dx,dy);
+  if(len>max){dx=dx/len*max;dy=dy/len*max;}
+  joyKnob.style.transform=`translate(${dx}px,${dy}px)`;
+  move.x=dx/max; move.z=dy/max;
+}
+
+joyBase.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const t=e.changedTouches[0];
+  joyActive=true; joyId=t.identifier;
+  const r=joyBase.getBoundingClientRect();
+  joyOrigin.x=r.left+r.width/2; joyOrigin.y=r.top+r.height/2;
+  setKnob(t.clientX-joyOrigin.x, t.clientY-joyOrigin.y);
+  hint.style.display='none';
+},{passive:false});
+
+window.addEventListener('touchmove',e=>{
+  for(const t of e.changedTouches){
+    if(t.identifier===joyId && joyActive) setKnob(t.clientX-joyOrigin.x, t.clientY-joyOrigin.y);
+    if(t.identifier===lookId && lookActive){
+      yaw -= (t.clientX-lastLook.x)*0.004;
+      pitch -= (t.clientY-lastLook.y)*0.003;
+      pitch = Math.max(-1.2, Math.min(1.2, pitch));
+      lastLook.x=t.clientX; lastLook.y=t.clientY;
+    }
+  }
+},{passive:false});
+
+window.addEventListener('touchend',e=>{
+  for(const t of e.changedTouches){
+    if(t.identifier===joyId){joyActive=false;joyId=null;joyKnob.style.transform='translate(0,0)';move.x=move.z=0;}
+    if(t.identifier===lookId){lookActive=false;lookId=null;}
+  }
+});
+
+lookZone.addEventListener('touchstart',e=>{
+  e.preventDefault();
+  const t=e.changedTouches[0];
+  lookActive=true; lookId=t.identifier;
+  lastLook.x=t.clientX; lastLook.y=t.clientY;
+  hint.style.display='none';
+},{passive:false});
+
+document.getElementById('btn-action').addEventListener('touchstart',e=>{e.preventDefault(); doAction();},{passive:false});
+document.getElementById('btn-enter').addEventListener('touchstart',e=>{e.preventDefault(); toggleEnter();},{passive:false});
+document.getElementById('btn-shop').addEventListener('touchstart',e=>{e.preventDefault(); shopEl.style.display = shopEl.style.display==='block'?'none':'block';},{passive:false});
+document.getElementById('close-shop').addEventListener('touchstart',e=>{e.preventDefault(); shopEl.style.display='none';},{passive:false});
+
+document.getElementById('up-dig').addEventListener('touchstart',e=>{
+  e.preventDefault();
+  if(money>=40){money-=40; digPower++; updateUI();}
+},{passive:false});
+document.getElementById('up-truck').addEventListener('touchstart',e=>{
+  e.preventDefault();
+  if(money>=60){money-=60; dumpTruck.userData.maxLoad+=12; updateUI();}
+},{passive:false});
+document.getElementById('up-speed').addEventListener('touchstart',e=>{
+  e.preventDefault();
+  if(money>=50){money-=50; speedMult+=0.25; updateUI();}
+},{passive:false});
+document.getElementById('up-sell').addEventListener('touchstart',e=>{
+  e.preventDefault();
+  if(gold>0){money += gold*8; gold=0; updateUI();}
+},{passive:false});
+
+function updateUI(){
+  document.getElementById('money').textContent = money;
+  document.getElementById('gold').textContent = gold;
+  document.getElementById('gravel').textContent = gravel;
+  document.getElementById('truckload').textContent = dumpTruck.userData.load;
+}
+
+function doAction(){
+  if(mode==='foot' || mode==='excavator') dig();
+  else if(mode==='payloader') scoop();
+  else if(mode==='truck') dumpAtSluice();
+}
+
+function dig(){
+  if(mode==='excavator'){
+    const dir = new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), currentVehicle.rotation.y);
+    raycaster.set(currentVehicle.position.clone().add(new THREE.Vector3(0,2.5,0)), dir);
+  } else {
+    raycaster.setFromCamera(new THREE.Vector2(0,0), camera);
+  }
+  const hits = raycaster.intersectObjects([...blocks.values()]);
+  if(!hits.length || hits[0].distance > (mode==='excavator'?10:6.5)) return;
+
+  const mesh = hits[0].object;
+  const ud = mesh.userData;
+  for(let i=0;i<digPower;i++){
+    if(ud.h<=0) break;
+    ud.h--;
+  }
+  if(ud.h<=0){
+    scene.remove(mesh);
+    blocks.delete(key(ud.x,ud.z));
+  } else {
+    mesh.geometry.dispose();
+    mesh.geometry = new THREE.BoxGeometry(CELL, CELL*ud.h, CELL);
+    mesh.position.y = CELL*ud.h/2;
+    mesh.material = deepMat;
+  }
+
+  const amount = 1 + (ud.hasGold ? 2 : 0) + Math.floor(Math.random()*digPower);
+  const pile = new THREE.Mesh(new THREE.DodecahedronGeometry(0.45+Math.random()*0.3,0), gravelMat);
+  pile.position.copy(hits[0].point); pile.position.y += 0.5;
+  pile.userData = {amount};
+  scene.add(pile); gravelPiles.push(pile);
+}
+
+function scoop(){
+  for(let i=gravelPiles.length-1;i>=0;i--){
+    const p = gravelPiles[i];
+    if(p.position.distanceTo(currentVehicle.position)<5.5){
+      gravel += p.userData.amount;
+      scene.remove(p); gravelPiles.splice(i,1);
+    }
+  }
+  if(dumpTruck.position.distanceTo(currentVehicle.position)<7 && gravel>0){
+    const space = dumpTruck.userData.maxLoad - dumpTruck.userData.load;
+    const take = Math.min(gravel, space);
+    dumpTruck.userData.load += take;
+    gravel -= take;
+  }
+  updateUI();
+}
+
+function dumpAtSluice(){
+  if(dumpTruck.userData.load<=0) return;
+  if(dumpTruck.position.distanceTo(sluice.position)>13) return;
+
+  const amount = dumpTruck.userData.load;
+  dumpTruck.userData.load = 0;
+  updateUI();
+
+  setTimeout(()=>{
+    const goldAmt = Math.max(2, Math.floor(amount * (0.5 + Math.random()*0.6)));
+    for(let i=0;i<goldAmt;i++){
+      const n = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28+Math.random()*0.2,0), goldMat);
+      n.position.set(sluice.position.x+(Math.random()-0.5)*1.5, 1.4, sluice.position.z+5+Math.random()*0.6);
+      n.userData.vel = new THREE.Vector3((Math.random()-0.5)*1.4, 2+Math.random()*2, 1.3+Math.random());
+      scene.add(n); goldNuggets.push(n);
+    }
+  }, 1400 + amount*70);
+}
+
+function toggleEnter(){
+  if(mode!=='foot'){
+    camera.position.copy(currentVehicle.position);
+    camera.position.y += 4;
+    currentVehicle = null;
+    mode = 'foot';
+    modeEl.textContent = 'On Foot';
+    btnAction.textContent = 'DIG';
+    return;
+  }
+  let nearest=null, best=7;
+  for(const v of vehicles){
+    const d = camera.position.distanceTo(v.position);
+    if(d<best){best=d; nearest=v;}
+  }
+  if(!nearest) return;
+  currentVehicle = nearest;
+  mode = nearest.userData.type;
+  modeEl.textContent = mode.toUpperCase();
+  if(mode==='excavator') btnAction.textContent='DIG';
+  else if(mode==='payloader') btnAction.textContent='SCOOP';
+  else btnAction.textContent='DUMP';
+}
+
+const clock = new THREE.Clock();
+function animate(){
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  if(mode==='foot'){
+    const speed = 11;
+    const forward = new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+    const right = new THREE.Vector3(1,0,0).applyAxisAngle(new THREE.Vector3(0,1,0), yaw);
+    velocity.x*=(1-8*dt); velocity.z*=(1-8*dt); velocity.y-=19*dt;
+    velocity.addScaledVector(forward, -move.z*speed*dt);
+    velocity.addScaledVector(right, move.x*speed*dt);
+
+    const next = camera.position.clone().addScaledVector(velocity, dt);
+    if(!collides(next, 1.1)){
+      camera.position.copy(next);
+    } else {
+      velocity.x = velocity.z = 0;
+    }
+    if(camera.position.y<2.8){camera.position.y=2.8; velocity.y=0; canJump=true;}
+
+    camera.rotation.order='YXZ'; camera.rotation.y=yaw; camera.rotation.x=pitch;
+  } else {
+    const v = currentVehicle;
+    const spd = v.userData.speed * speedMult;
+    const turn = v.userData.turn;
+    v.rotation.y -= move.x * turn * dt;
+    const forward = new THREE.Vector3(0,0,-1).applyAxisAngle(new THREE.Vector3(0,1,0), v.rotation.y);
+    const next = v.position.clone().addScaledVector(forward, -move.z * spd * dt);
+    if(!collides(next, 2.2)){
+      v.position.copy(next);
+    }
+
+    const camOffset = new THREE.Vector3(0, 7.5, 12).applyAxisAngle(new THREE.Vector3(0,1,0), v.rotation.y);
+    camera.position.lerp(v.position.clone().add(camOffset), 0.11);
+    camera.lookAt(v.position.x, v.position.y+2.2, v.position.z);
+  }
+
+  if(mode==='foot'){
+    for(let i=gravelPiles.length-1;i>=0;i--){
+      const p=gravelPiles[i];
+      if(p.position.distanceTo(camera.position)<2.5){
+        gravel+=p.userData.amount;
+        scene.remove(p); gravelPiles.splice(i,1);
+        updateUI();
+      }
+    }
+  }
+
+  for(let i=goldNuggets.length-1;i>=0;i--){
+    const n=goldNuggets[i];
+    n.userData.vel.y-=12*dt;
+    n.position.addScaledVector(n.userData.vel,dt);
+    n.rotation.x+=dt*4; n.rotation.y+=dt*5;
+    if(n.position.y<0.4){n.position.y=0.4; n.userData.vel.set(0,0,0);}
+    const near = n.position.distanceTo(camera.position)<2.4 || (currentVehicle && n.position.distanceTo(currentVehicle.position)<3.8);
+    if(near){
+      gold += 1 + Math.floor(Math.random()*3);
+      scene.remove(n); goldNuggets.splice(i,1);
+      updateUI();
+    }
+  }
+
+  water.material.opacity = 0.48 + Math.sin(clock.elapsedTime*2.6)*0.08;
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize',()=>{
+  camera.aspect=innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+</script>
+</body>
+</html>
